@@ -1,45 +1,87 @@
-# Streamlit dashboard for reviewing logs & clips.
+# review_app.py
+# Streamlit dashboard for reviewing HaloSight logs & clips.
+
 import streamlit as st
 import pandas as pd
 import os
 
+# ==============================
+# Directories
+# ==============================
 LOG_DIR = "logs"
-CLIP_DIR = os.path.join(LOG_DIR, "clips")
+CLIP_DIR = "event_clips"   # match your alerts.py
 
 st.set_page_config(page_title="HaloSight Review Dashboard", layout="wide")
-
 st.title("🚀 HaloSight Event Review Dashboard")
 
-# === Load Logs ===
-logs = []
-for file in sorted(os.listdir(LOG_DIR)):
-    if file.endswith(".csv"):
-        df = pd.read_csv(os.path.join(LOG_DIR, file))
-        df["log_file"] = file
-        logs.append(df)
+# ==============================
+# Load and Separate Logs
+# ==============================
+alert_logs = []
+baseline_logs = []
 
-if logs:
-    all_logs = pd.concat(logs, ignore_index=True)
-    st.subheader("📑 Detection Logs")
-    level_filter = st.selectbox("Filter by Alert Level", ["All", "Info", "Caution", "Warning", "Critical"])
+if os.path.exists(LOG_DIR):
+    for file in sorted(os.listdir(LOG_DIR)):
+        if file.endswith(".csv"):
+            path = os.path.join(LOG_DIR, file)
+            try:
+                df = pd.read_csv(path)
+
+                # --- Processed Alert Logs (with alert_level) ---
+                if "alert_level" in df.columns:
+                    df["log_file"] = file
+                    alert_logs.append(df)
+
+                # --- Raw YOLO Baseline Logs (frame/class_id format) ---
+                elif "frame" in df.columns and "class_id" in df.columns:
+                    df["log_file"] = file
+                    baseline_logs.append(df)
+
+            except Exception as e:
+                st.error(f"❌ Error reading {file}: {e}")
+
+# ==============================
+# Display Processed Alert Logs
+# ==============================
+if alert_logs:
+    st.subheader("📑 Processed Alert Logs")
+    all_alerts = pd.concat(alert_logs, ignore_index=True)
+
+    # Filter dropdown
+    level_filter = st.selectbox(
+        "Filter by Alert Level",
+        ["All", "Info", "Caution", "Warning", "Critical"]
+    )
     if level_filter != "All":
-        filtered = all_logs[all_logs["alert_level"].str.lower() == level_filter.lower()]
+        filtered = all_alerts[all_alerts["alert_level"].str.lower() == level_filter.lower()]
     else:
-        filtered = all_logs
+        filtered = all_alerts
 
     st.dataframe(filtered, use_container_width=True)
 else:
-    st.warning("No logs found yet!")
+    st.info("No processed alert logs found yet.")
 
-# === Review Clips ===
+# ==============================
+# Display Raw Baseline Logs
+# ==============================
+if baseline_logs:
+    st.subheader("📊 Raw Detection Logs (Baseline)")
+    all_baseline = pd.concat(baseline_logs, ignore_index=True)
+    st.dataframe(all_baseline, use_container_width=True)
+
+# ==============================
+# Review Critical Clips
+# ==============================
 st.subheader("🎥 Critical Event Clips")
 
 if os.path.exists(CLIP_DIR):
     clips = sorted(os.listdir(CLIP_DIR))
-    for clip in clips:
-        if clip.endswith(".mp4"):
-            st.write(f"**{clip}**")
-            st.video(os.path.join(CLIP_DIR, clip))
+    if clips:
+        for clip in clips:
+            if clip.endswith(".avi") or clip.endswith(".mp4"):
+                st.write(f"**{clip}**")
+                st.video(os.path.join(CLIP_DIR, clip))
+    else:
+        st.info("No clips recorded yet.")
 else:
-    st.info("No clips recorded yet.")
-
+    st.info("No clips directory found yet.")

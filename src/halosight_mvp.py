@@ -32,7 +32,7 @@ model.to(device)
 os.makedirs(LOG_PATH, exist_ok=True)
 
 # rolling video buffer
-frame_buffer = deque(maxlen=BUFFER_SIZE)
+frame_buffer = deque(maxlen=100)
 
 # ==============================
 # ZONE DRAWING (interactive)
@@ -141,7 +141,7 @@ def main():
     detections_log = []
 
     # --- Step 2: Start detection loop
-    recorder = ClipRecorder(buffer_size=150)  # ~10s buffer at 15 FPS
+    recorder = ClipRecorder(buffer_size=50)  # ~5s buffer
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -151,8 +151,8 @@ def main():
         recorder.update(frame)
 
         # Run detection, check for critical event
-        if alert_level == "Critical":
-            recorder.save_clip(fps=10)
+        # if alert_level == "Critical":
+        #     recorder.save_clip(fps=10)
 
         results = model(frame, imgsz=IMG_SIZE, verbose=False)
         frame_detections = []
@@ -175,11 +175,12 @@ def main():
                 detections_log.append(detection)
                 frame_detections.append(detection)
 
-                # 3. Play sound + save clip if critical
+                # 3. Play sound + save clip if warning/critical
                 play_sound(alert_level.lower())
-                if alert_level.lower() == "critical":
-                    save_clip(list(frame_buffer), "critical")
-
+                if alert_level.lower() in ["warning", "critical"]:
+                    # save last ~5s from recorder buffer
+                    recorder.save_clip(fps=10)
+                    save_clip(list(frame_buffer), alert_level.lower())
 
         # --- Determine zone alert level for this frame ---
         zone_alert = "safe"

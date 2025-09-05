@@ -91,10 +91,10 @@ def draw_banner(frame, level: str):
 # ==============================
 # LOGGING
 # ==============================
-def log_event(level: str, obj_class: str, confidence: float):
-    """Append event to CSV log"""
+def log_event(alert_level: str, obj_class: str, confidence: float):
+    """Append event to CSV log with consistent alert_level column"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = {"time": timestamp, "level": level,
+    row = {"time": timestamp, "alert_level": alert_level,
            "object": obj_class, "confidence": confidence}
     df = pd.DataFrame([row])
 
@@ -108,11 +108,11 @@ def log_event(level: str, obj_class: str, confidence: float):
 # VIDEO CLIP SAVING
 # ==============================
 def save_clip(frames, level: str):
-    """Save last 3s of frames if critical alert"""
-    if level != "critical" or not frames:
+    """Save last 5s of frames if warning/critical alert"""
+    if level not in ["warning", "critical"] or not frames:
         return
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(CLIP_DIR, f"critical_event_{ts}.avi")
+    filename = os.path.join(CLIP_DIR, f"{level}_event_{ts}.avi")
 
     h, w = frames[0].shape[:2]
     out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*"XVID"), 10, (w, h))

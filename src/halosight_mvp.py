@@ -7,6 +7,8 @@ from datetime import datetime
 from collections import deque
 from ultralytics import YOLO
 from zone_overlay import draw_zone
+from collections import deque
+from alerts import play_sound, log_event, save_clip, draw_object_alert, draw_banner
 
 # ==============================
 # CONFIG
@@ -95,45 +97,6 @@ def get_alert_level(class_name, box, zone_coords):
 
     return "Info"
 
-def draw_alert(frame, box, class_name, alert_level, conf):
-    x1, y1, x2, y2 = map(int, box)
-    colors = {
-        "Info": (255, 255, 0),      # blue
-        "Caution": (0, 255, 255),   # yellow
-        "Warning": (0, 165, 255),   # orange
-        "Critical": (0, 0, 255)     # red
-    }
-    color = colors.get(alert_level, (255, 255, 255))
-
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    cv2.putText(frame, f"{class_name} {conf:.2f} {alert_level}",
-                (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-def play_alert(alert_level):
-    if alert_level == "Critical":
-        winsound.Beep(1000, 500)
-
-def log_detection(class_name, alert_level, conf, box):
-    # --- Determine overall zone alert level ---
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = {
-        "timestamp": ts,
-        "object": class_name,
-        "alert": alert_level,
-        "confidence": f"{conf:.2f}",
-        "coords": str(box)
-    }
-    return row
-
-def save_clip(buffer, filename):
-    if len(buffer) == 0:
-        return
-    h, w = buffer[0].shape[:2]
-    out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'XVID'), 20, (w, h))
-    for f in buffer:
-        out.write(f)
-    out.release()
-    print(f"[INFO] Critical clip saved: {filename}")
 
 # ==============================
 # MAIN
@@ -194,16 +157,21 @@ def main():
                 xyxy = box.xyxy.cpu().numpy().tolist()[0]
 
                 alert_level = get_alert_level(class_name, xyxy, zone_coords)
-                draw_alert(frame, xyxy, class_name, alert_level, conf)
 
-                detection = log_detection(class_name, alert_level, conf, xyxy)
+                # 1. Draw object bounding box + label
+                draw_object_alert(frame, xyxy, class_name, alert_level.lower(), conf)
+
+                # 2. Log event
+                detection = {"alert": alert_level, "class": class_name, "conf": conf}
+                log_event(alert_level.lower(), class_name, conf)
                 detections_log.append(detection)
                 frame_detections.append(detection)
 
-                play_alert(alert_level)
-                if alert_level == "Critical":
-                    filename = os.path.join(LOG_PATH, f"critical_event_{datetime.now().strftime('%Y%m%d_%H%M%S')}.avi")
-                    save_clip(frame_buffer, filename)    
+                # 3. Play sound + save clip if critical
+                play_sound(alert_level.lower())
+                if alert_level.lower() == "critical":
+                    save_clip(list(frame_buffer), "critical")
+
 
         # --- Determine zone alert level for this frame ---
         zone_alert = "safe"
@@ -218,8 +186,10 @@ def main():
             elif d["alert"] == "Info" and zone_alert == "safe":
                 zone_alert = "info"
 
-        # --- Draw glowing safety zone overlay ---
+        # --- Draw glowing safety zone overlay + top banner ---
         frame = draw_zone(frame, zone_coords, alert_level=zone_alert)
+        frame = draw_banner(frame, zone_alert)
+
 
         cv2.imshow("HaloSight MVP", frame)
         key = cv2.waitKey(1) & 0xFF

@@ -9,6 +9,7 @@ from ultralytics import YOLO
 from zone_overlay import draw_zone
 from collections import deque
 from alerts import play_sound, log_event, save_clip, draw_object_alert, draw_banner
+from recorder import ClipRecorder
 
 # ==============================
 # CONFIG
@@ -140,11 +141,18 @@ def main():
     detections_log = []
 
     # --- Step 2: Start detection loop
+    recorder = ClipRecorder(buffer_size=150)  # ~10s buffer at 15 FPS
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        frame_buffer.append(frame.copy())
+
+        # update recorder
+        recorder.update(frame)
+
+        # Run detection, check for critical event
+        if alert_level == "Critical":
+            recorder.save_clip(fps=10)
 
         results = model(frame, imgsz=IMG_SIZE, verbose=False)
         frame_detections = []

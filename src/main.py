@@ -26,7 +26,9 @@ CLIP_PATH = "logs/critical_event.avi"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"[INFO] Using device: {device}")
 
-model = YOLO(MODEL_PATH)
+from model_loader import load_model
+model = load_model()
+
 # after model load
 model.to(device)
 os.makedirs(LOG_PATH, exist_ok=True)

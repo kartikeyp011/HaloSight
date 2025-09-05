@@ -6,6 +6,7 @@ import pandas as pd
 from datetime import datetime
 from collections import deque
 from ultralytics import YOLO
+from zone_overlay import draw_zone
 
 # ==============================
 # CONFIG
@@ -23,6 +24,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"[INFO] Using device: {device}")
 
 model = YOLO(MODEL_PATH)
+# after model load
+model.to(device)
 os.makedirs(LOG_PATH, exist_ok=True)
 
 # rolling video buffer
@@ -51,7 +54,7 @@ def get_next_logfile(log_dir, base_name="detection_log"):
     next_num = max(nums) + 1 if nums else 1
     return os.path.join(log_dir, f"{base_name}_{next_num}.csv")
 
-def draw_zone(event, x, y, flags, param):
+def set_zone(event, x, y, flags, param):
     global zone, drawing
     if event == cv2.EVENT_LBUTTONDOWN:
         drawing = True
@@ -111,6 +114,7 @@ def play_alert(alert_level):
         winsound.Beep(1000, 500)
 
 def log_detection(class_name, alert_level, conf, box):
+    # --- Determine overall zone alert level ---
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     row = {
         "timestamp": ts,
@@ -141,7 +145,7 @@ def main():
 
     # --- Step 1: User draws safety zone
     cv2.namedWindow("Set Safety Zone")
-    cv2.setMouseCallback("Set Safety Zone", draw_zone)
+    cv2.setMouseCallback("Set Safety Zone", set_zone)
 
     while True:
         ret, frame = cap.read()
@@ -150,7 +154,8 @@ def main():
         temp_frame = frame.copy()
 
         if len(zone) == 2:
-            cv2.rectangle(temp_frame, zone[0], zone[1], (0, 0, 255), 2)
+            # just draw the rectangle directly while setting zone
+            cv2.rectangle(temp_frame, zone[0], zone[1], (0, 255, 0), 2)
 
         cv2.imshow("Set Safety Zone", temp_frame)
         key = cv2.waitKey(1) & 0xFF
@@ -162,8 +167,10 @@ def main():
             return
 
     cv2.destroyWindow("Set Safety Zone")
-    zx1, zy1 = zone[0]
-    zx2, zy2 = zone[1]
+
+    # Now we finalize zone_coords AFTER confirmation
+    zx1, zy1 = min(zone[0][0], zone[1][0]), min(zone[0][1], zone[1][1])
+    zx2, zy2 = max(zone[0][0], zone[1][0]), max(zone[0][1], zone[1][1])
     zone_coords = (zx1, zy1, zx2, zy2)
     print(f"[INFO] Safety zone set: {zone_coords}")
 
@@ -177,24 +184,42 @@ def main():
         frame_buffer.append(frame.copy())
 
         results = model(frame, imgsz=IMG_SIZE, verbose=False)
+        frame_detections = []
+
         for r in results:
             for box in r.boxes:
-                cls = int(box.cls[0])
+                cls = int(box.cls.item())
                 class_name = model.names[cls]
-                conf = float(box.conf[0])
-                xyxy = box.xyxy[0].tolist()
+                conf = float(box.conf.item())
+                xyxy = box.xyxy.cpu().numpy().tolist()[0]
 
                 alert_level = get_alert_level(class_name, xyxy, zone_coords)
-
                 draw_alert(frame, xyxy, class_name, alert_level, conf)
-                detections_log.append(log_detection(class_name, alert_level, conf, xyxy))
+
+                detection = log_detection(class_name, alert_level, conf, xyxy)
+                detections_log.append(detection)
+                frame_detections.append(detection)
+
                 play_alert(alert_level)
-
                 if alert_level == "Critical":
-                    save_clip(frame_buffer, CLIP_PATH)
+                    filename = os.path.join(LOG_PATH, f"critical_event_{datetime.now().strftime('%Y%m%d_%H%M%S')}.avi")
+                    save_clip(frame_buffer, filename)    
 
-        # Draw safety zone
-        cv2.rectangle(frame, (zx1, zy1), (zx2, zy2), (0, 0, 255), 2)
+        # --- Determine zone alert level for this frame ---
+        zone_alert = "safe"
+        for d in frame_detections:
+            if d["alert"] == "Critical":
+                zone_alert = "critical"
+                break
+            elif d["alert"] == "Warning":
+                zone_alert = "warning"
+            elif d["alert"] == "Caution" and zone_alert not in ["warning", "critical"]:
+                zone_alert = "caution"
+            elif d["alert"] == "Info" and zone_alert == "safe":
+                zone_alert = "info"
+
+        # --- Draw glowing safety zone overlay ---
+        frame = draw_zone(frame, zone_coords, alert_level=zone_alert)
 
         cv2.imshow("HaloSight MVP", frame)
         key = cv2.waitKey(1) & 0xFF

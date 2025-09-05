@@ -11,3 +11,12 @@ def get_next_filename(folder: str, base: str, ext: str) -> str:
         if not os.path.exists(path):
             return path
         i += 1
+
+
+
+'''
+from utils.file_manager import get_next_filename
+
+log_file = get_next_filename("logs", "detection_log", "csv")
+clip_file = get_next_filename("logs", "critical_event", "avi")
+'''

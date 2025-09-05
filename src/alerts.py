@@ -66,8 +66,12 @@ def draw_object_alert(frame, box, obj_class: str, level: str, conf: float):
 
 
 # --- Zone-level banner alerts ---
+import cv2
+import numpy as np
+
 def draw_banner(frame, level: str):
-    """Overlay top banner with overall alert status"""
+    """Add a banner strip ABOVE the webcam feed showing overall alert status"""
+
     color_map = {
         "safe": (0, 200, 0),
         "info": (0, 255, 0),
@@ -75,18 +79,29 @@ def draw_banner(frame, level: str):
         "warning": (0, 165, 255),
         "critical": (0, 0, 255)
     }
-    color = color_map.get(level, (255, 255, 255))
+    color = color_map.get(level.lower(), (255, 255, 255))
 
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (frame.shape[1], 60), color, -1)
+    h, w = frame.shape[:2]
+    bar_height = 50
+
+    # make a banner strip
+    banner = np.zeros((bar_height, w, 3), dtype=np.uint8)
+
+    # fill background with semi-transparent color
+    overlay = banner.copy()
+    cv2.rectangle(overlay, (0, 0), (w, bar_height), color, -1)
     alpha = 0.6
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    cv2.addWeighted(overlay, alpha, banner, 1 - alpha, 0, banner)
 
-    cv2.putText(frame, f"ZONE STATUS: {level.upper()}",
-                (20, 40), cv2.FONT_HERSHEY_SIMPLEX,
-                1.0, (255, 255, 255), 2)
-    return frame
+    # put text on the banner
+    cv2.putText(banner,
+                f"ZONE STATUS: {level.upper()}",
+                (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                0.8, (255, 255, 255), 2, cv2.LINE_AA)
 
+    # stack banner above frame
+    combined = np.vstack((banner, frame))
+    return combined
 
 # ==============================
 # LOGGING

@@ -4,7 +4,18 @@
 import streamlit as st
 import pandas as pd
 import os
+import os
+import subprocess
 
+# ==============================
+# Ensure Folder Structure
+# ==============================
+def ensure_dirs():
+    folders = ["logs", "event_clips", "config"]
+    for f in folders:
+        if not os.path.exists(f):
+            os.makedirs(f)
+            print(f"📂 Created folder: {f}")
 # ==============================
 # Directories
 # ==============================
@@ -85,3 +96,24 @@ if os.path.exists(CLIP_DIR):
         st.info("No clips recorded yet.")
 else:
     st.info("No clips directory found yet.")
+
+# ==============================
+# Ensure Folder Structure
+# ==============================
+def ensure_dirs():
+    folders = ["logs", "event_clips", "config"]
+    for f in folders:
+        if not os.path.exists(f):
+            os.makedirs(f)
+            print(f"📂 Created folder: {f}")
+
+# ==============================
+# Main Launcher
+# ==============================
+def main():
+    print("🚀 Launching HaloSight...")
+    ensure_dirs()
+    subprocess.run(["python", "src/main.py"])
+
+if __name__ == "__main__":
+    main()

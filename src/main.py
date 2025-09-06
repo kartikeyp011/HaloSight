@@ -5,16 +5,15 @@ import winsound
 import pandas as pd
 from datetime import datetime
 from collections import deque
-from ultralytics import YOLO
+
 from zone_overlay import draw_zone
-from collections import deque
 from alerts import play_sound, log_event, save_clip, draw_object_alert, draw_banner
 from recorder import ClipRecorder
+from detectors import MultiDetector   # <-- NEW multi-model detector
 
 # ==============================
 # CONFIG
 # ==============================
-MODEL_PATH = "yolov8s.pt"   # use small model for better accuracy
 IMG_SIZE = 416              # slightly higher for better detection
 BUFFER_SIZE = 150           # frames (~5s at 30fps)
 LOG_PATH = "logs"
@@ -26,11 +25,9 @@ CLIP_PATH = "logs/critical_event.avi"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"[INFO] Using device: {device}")
 
-from model_loader import load_model
-model = load_model()
+# load multi-model detector
+detector = MultiDetector()
 
-# after model load
-model.to(device)
 os.makedirs(LOG_PATH, exist_ok=True)
 
 # rolling video buffer
@@ -71,7 +68,6 @@ def set_zone(event, x, y, flags, param):
 # ==============================
 # HELPERS
 # ==============================
-
 def is_inside_zone(box, zone_coords):
     """Check if bounding box overlaps with safety zone"""
     x1, y1, x2, y2 = map(int, box)
@@ -85,9 +81,9 @@ def is_inside_zone(box, zone_coords):
 
 def get_alert_level(class_name, box, zone_coords):
     """Assign alert level based on rules"""
-    # Debug print
     print(f"[DEBUG] Checking {class_name} box={box}")
 
+    # General model
     if class_name == "person":
         if is_inside_zone(box, zone_coords):
             return "Caution"
@@ -95,11 +91,18 @@ def get_alert_level(class_name, box, zone_coords):
     if class_name in ["knife", "scissors", "cell phone"]:
         return "Warning"
 
-    if class_name in ["no_helmet"]:   # example custom hazard
+    # PPE model classes
+    if class_name.startswith("ppe_"):
+        if "helmet" in class_name and "missing" in class_name:
+            return "Critical"
+        elif "vest" in class_name and "missing" in class_name:
+            return "Warning"
+
+    # Hazard/fire-smoke model classes
+    if class_name.startswith("hazard_"):
         return "Critical"
 
     return "Info"
-
 
 # ==============================
 # MAIN
@@ -120,7 +123,6 @@ def main():
         temp_frame = frame.copy()
 
         if len(zone) == 2:
-            # just draw the rectangle directly while setting zone
             cv2.rectangle(temp_frame, zone[0], zone[1], (0, 255, 0), 2)
 
         cv2.imshow("Set Safety Zone", temp_frame)
@@ -134,57 +136,50 @@ def main():
 
     cv2.destroyWindow("Set Safety Zone")
 
-    # Now we finalize zone_coords AFTER confirmation
+    # Finalize zone
     zx1, zy1 = min(zone[0][0], zone[1][0]), min(zone[0][1], zone[1][1])
     zx2, zy2 = max(zone[0][0], zone[1][0]), max(zone[0][1], zone[1][1])
     zone_coords = (zx1, zy1, zx2, zy2)
     print(f"[INFO] Safety zone set: {zone_coords}")
 
     detections_log = []
-
-    # --- Step 2: Start detection loop
     recorder = ClipRecorder(buffer_size=50)  # ~5s buffer
+
+    # --- Step 2: Detection loop ---
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # update recorder
         recorder.update(frame)
 
-        # Run detection, check for critical event
-        # if alert_level == "Critical":
-        #     recorder.save_clip(fps=10)
-
-        results = model(frame, imgsz=IMG_SIZE, verbose=False)
+        # Run detection from all models
+        detections = detector.detect(frame)
         frame_detections = []
 
-        for r in results:
-            for box in r.boxes:
-                cls = int(box.cls.item())
-                class_name = model.names[cls]
-                conf = float(box.conf.item())
-                xyxy = box.xyxy.cpu().numpy().tolist()[0]
+        for d in detections:
+            class_name = d["type"]
+            conf = d["conf"]
+            xyxy = d["bbox"]
 
-                alert_level = get_alert_level(class_name, xyxy, zone_coords)
+            alert_level = get_alert_level(class_name, xyxy, zone_coords)
 
-                # 1. Draw object bounding box + label
-                draw_object_alert(frame, xyxy, class_name, alert_level.lower(), conf)
+            # 1. Draw bounding box
+            draw_object_alert(frame, xyxy, class_name, alert_level.lower(), conf)
 
-                # 2. Log event
-                detection = {"alert": alert_level, "class": class_name, "conf": conf}
-                log_event(alert_level.lower(), class_name, conf)
-                detections_log.append(detection)
-                frame_detections.append(detection)
+            # 2. Log
+            detection = {"alert": alert_level, "class": class_name, "conf": conf}
+            log_event(alert_level.lower(), class_name, conf)
+            detections_log.append(detection)
+            frame_detections.append(detection)
 
-                # 3. Play sound + save clip if warning/critical
-                play_sound(alert_level.lower())
-                if alert_level.lower() in ["warning", "critical"]:
-                    # save last ~5s from recorder buffer
-                    recorder.save_clip(fps=10)
-                    save_clip(list(frame_buffer), alert_level.lower())
+            # 3. Sound + clip save
+            play_sound(alert_level.lower())
+            if alert_level.lower() in ["warning", "critical"]:
+                recorder.save_clip(fps=10)
+                save_clip(list(frame_buffer), alert_level.lower())
 
-        # --- Determine zone alert level for this frame ---
+        # --- Determine overall zone alert ---
         zone_alert = "safe"
         for d in frame_detections:
             if d["alert"] == "Critical":
@@ -197,10 +192,9 @@ def main():
             elif d["alert"] == "Info" and zone_alert == "safe":
                 zone_alert = "info"
 
-        # --- Draw glowing safety zone overlay + top banner ---
+        # --- Draw overlays ---
         frame = draw_zone(frame, zone_coords, alert_level=zone_alert)
         frame = draw_banner(frame, zone_alert)
-
 
         cv2.imshow("HaloSight MVP", frame)
         key = cv2.waitKey(1) & 0xFF
@@ -211,13 +205,14 @@ def main():
     cv2.destroyAllWindows()
 
     # Save CSV log
-    # Save CSV log
     csv_path = get_next_logfile(LOG_PATH, "detection_log")
     df = pd.DataFrame(detections_log)
     df.to_csv(csv_path, index=False)
     print(f"[INFO] Log saved: {csv_path}")
+
 # ==============================
 # RUN
 # ==============================
 if __name__ == "__main__":
     main()
+
